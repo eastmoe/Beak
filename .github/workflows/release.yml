@@ -113,7 +113,38 @@ jobs:
           if ($wheel.Name -notmatch 'win_amd64\.whl$') {
             throw "Expected a Windows platform wheel, got $($wheel.Name)."
           }
-          python -c "import sys, zipfile; wheel=sys.argv[1]; names=set(zipfile.ZipFile(wheel).namelist()); required={'beak/webview2-worker/Beak.WebView2Worker.exe','beak/webview2-worker/Beak.WebView2Worker.dll','beak/webview2-worker/Beak.WebView2Worker.deps.json','beak/webview2-worker/Beak.WebView2Worker.runtimeconfig.json','beak/webview2-worker/Microsoft.Web.WebView2.Core.dll','beak/webview2-worker/Microsoft.Web.WebView2.WinForms.dll','beak/webview2-worker/WebView2Loader.dll','beak/webview2-worker/coreclr.dll','beak/webview2-worker/hostfxr.dll','beak/webview2-worker/hostpolicy.dll','beak/webview2-worker/runtimes/win-x64/native/WebView2Loader.dll'}; missing=sorted(required-names); assert not missing, 'Missing wheel payload: '+', '.join(missing); print('Verified', wheel)" "$($wheel.FullName)"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($wheel.FullName)
+          try {
+            $names = [System.Collections.Generic.HashSet[string]]::new(
+              [System.StringComparer]::OrdinalIgnoreCase
+            )
+            foreach ($entry in $archive.Entries) {
+              [void] $names.Add(($entry.FullName -replace '\\', '/'))
+            }
+
+            $required = @(
+              "beak/webview2-worker/Beak.WebView2Worker.exe",
+              "beak/webview2-worker/Beak.WebView2Worker.dll",
+              "beak/webview2-worker/Beak.WebView2Worker.deps.json",
+              "beak/webview2-worker/Beak.WebView2Worker.runtimeconfig.json",
+              "beak/webview2-worker/Microsoft.Web.WebView2.Core.dll",
+              "beak/webview2-worker/Microsoft.Web.WebView2.WinForms.dll",
+              "beak/webview2-worker/WebView2Loader.dll",
+              "beak/webview2-worker/coreclr.dll",
+              "beak/webview2-worker/hostfxr.dll",
+              "beak/webview2-worker/hostpolicy.dll"
+            )
+            $missing = @($required | Where-Object { -not $names.Contains($_) })
+            if ($missing.Count -gt 0) {
+              throw "Missing wheel payload: $($missing -join ', ')"
+            }
+
+            $workerFileCount = @($names | Where-Object { $_.StartsWith("beak/webview2-worker/") }).Count
+            Write-Host "Verified $($wheel.Name) with $workerFileCount WebView2 worker files."
+          } finally {
+            $archive.Dispose()
+          }
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
