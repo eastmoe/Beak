@@ -1,5 +1,5 @@
 from beak.jobs import JobManager
-from beak.schemas import OutputType, RenderRequest
+from beak.schemas import BrowserEngine, OutputType, RenderRequest
 
 
 def test_complete_page_defaults_to_async(tmp_path):
@@ -21,3 +21,14 @@ def test_rendered_html_defaults_to_sync(tmp_path):
 
     assert manager.should_run_async(request) is False
 
+
+def test_browser_engine_defaults_to_webview():
+    request = RenderRequest(url="https://example.com")
+
+    assert request.engine == BrowserEngine.WEBVIEW
+
+
+def test_browser_engine_accepts_edge():
+    request = RenderRequest(url="https://example.com", engine=BrowserEngine.EDGE)
+
+    assert request.engine == BrowserEngine.EDGE

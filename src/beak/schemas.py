@@ -13,6 +13,11 @@ class OutputType(StrEnum):
     SINGLE_FILE = "single_file"
 
 
+class BrowserEngine(StrEnum):
+    WEBVIEW = "webview"
+    EDGE = "edge"
+
+
 class WaitUntil(StrEnum):
     LOAD = "load"
     DOM_CONTENT_LOADED = "dom_content_loaded"
@@ -37,7 +42,7 @@ class Viewport(BaseModel):
     height: Annotated[int, Field(ge=240, le=4320, description="Viewport height in CSS pixels.")] = 768
     device_scale_factor: Annotated[
         float,
-        Field(ge=0.25, le=4.0, description="Reserved for future WebView2 DPI handling."),
+        Field(ge=0.25, le=4.0, description="Device scale factor used by Playwright Edge and reserved for WebView2 DPI handling."),
     ] = 1.0
 
 
@@ -46,7 +51,7 @@ class ProxyConfig(BaseModel):
         str,
         Field(
             examples=["http://127.0.0.1:7890", "socks5://127.0.0.1:1080"],
-            description="Proxy server passed to the WebView2 worker with --proxy-server.",
+            description="Proxy server passed to WebView2 with --proxy-server or to Playwright Edge launch options.",
         ),
     ]
     bypass_list: Annotated[
@@ -96,9 +101,13 @@ class WaitStrategy(BaseModel):
 
 class RenderRequest(BaseModel):
     url: Annotated[HttpUrl, Field(description="Target page URL.")]
+    engine: BrowserEngine = Field(
+        default=BrowserEngine.WEBVIEW,
+        description="Browser backend. `webview` uses the Windows WebView2 worker; `edge` uses headless Playwright with Microsoft Edge.",
+    )
     output: OutputType = Field(
         default=OutputType.RENDERED_HTML,
-        description="Export format produced after WebView2 finishes rendering.",
+        description="Export format produced after the selected browser engine finishes rendering.",
     )
     timeout_ms: Annotated[
         int,
@@ -130,6 +139,7 @@ class RenderRequest(BaseModel):
             "examples": [
                 {
                     "url": "https://example.com",
+                    "engine": "webview",
                     "timeout_ms": 30000,
                     "wait": {"until": "network_idle", "after_load_ms": 500, "network_idle_ms": 800},
                     "proxy": {"server": "http://127.0.0.1:7890"},
@@ -205,3 +215,7 @@ class HealthResponse(BaseModel):
     ok: bool
     worker_configured: bool
     worker_path: str
+    webview_worker_configured: bool
+    webview_worker_path: str
+    edge_playwright_configured: bool
+    edge_executable_path: str | None = None

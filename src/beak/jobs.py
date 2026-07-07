@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .schemas import Artifact, JobInfo, JobStatus, OutputType, RenderRequest, RenderResult
-from .worker import WebView2WorkerClient, WorkerError
+from .worker import WorkerError
 
 
 def utc_now() -> str:
@@ -32,7 +32,7 @@ class JobNotFound(KeyError):
 
 
 class JobManager:
-    def __init__(self, *, data_dir: Path, worker: WebView2WorkerClient, max_workers: int = 4) -> None:
+    def __init__(self, *, data_dir: Path, worker: object, max_workers: int = 4) -> None:
         self.data_dir = data_dir
         self.jobs_dir = data_dir / "jobs"
         self.profiles_dir = data_dir / "profiles"
@@ -171,7 +171,8 @@ class JobManager:
 
     @staticmethod
     def _profile_key(job_id: str, request: RenderRequest) -> str:
+        prefix = request.engine
         if request.proxy is None:
-            return job_id
+            return f"{prefix}-{job_id}"
         digest = hashlib.sha256(request.proxy.model_dump_json().encode("utf-8")).hexdigest()[:16]
-        return f"proxy-{digest}-{job_id}"
+        return f"{prefix}-proxy-{digest}-{job_id}"
