@@ -1,6 +1,6 @@
 [project]
 name = "beak"
-version = "0.1.0"
+version = "0.0.1"
 description = "Windows WebView2 backed browser rendering crawler API."
 readme = "README.md"
 requires-python = ">=3.11"

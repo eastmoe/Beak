@@ -173,4 +173,4 @@ WebView2 does not expose every Microsoft Edge "Save page as..." behavior as a si
 
 The repository includes a manual GitHub Actions workflow at `.github/workflows/release.yml`.
 
-Run it from GitHub Actions with a tag such as `v0.1.0` or `0.1.0`. It builds on `windows-latest` for Python `3.11`, `3.12`, `3.13`, and `3.14`, publishes the WebView2 worker, runs tests, builds Python distributions, uploads per-version ZIP artifacts, creates the tag, and publishes the ZIPs to the matching GitHub Release.
+Run it from GitHub Actions with a tag such as `v0.0.1` or `0.0.1`. It builds on `windows-latest` for Python `3.11`, `3.12`, `3.13`, and `3.14`, publishes the WebView2 worker, runs tests, builds Python distributions, uploads per-version ZIP artifacts, creates the tag, and publishes the ZIPs to the matching GitHub Release.
