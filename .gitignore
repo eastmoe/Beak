@@ -203,6 +203,14 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Beak runtime state
+data/
+test_outputs/
+
+# .NET build outputs
+[Bb]in/
+[Oo]bj/
+
 # Ruff stuff:
 .ruff_cache/
 
