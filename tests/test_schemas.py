@@ -1,6 +1,8 @@
 from beak.cli import build_parser, normalize_bind_host
 from beak.jobs import JobManager
 from beak.schemas import BrowserEngine, OutputType, RenderRequest
+from beak.worker import WebView2WorkerClient
+import beak.worker as worker_module
 
 
 def test_complete_page_defaults_to_async(tmp_path):
@@ -57,3 +59,15 @@ def test_server_cli_normalizes_all_host_aliases():
     assert normalize_bind_host("*") == "0.0.0.0"
     assert normalize_bind_host("all-v6") == "::"
     assert normalize_bind_host("::1") == "::1"
+
+
+def test_webview_worker_prefers_packaged_executable(tmp_path, monkeypatch):
+    package_dir = tmp_path / "site-packages" / "beak"
+    packaged_worker = package_dir / "webview2-worker" / "Beak.WebView2Worker.exe"
+    packaged_worker.parent.mkdir(parents=True)
+    packaged_worker.write_text("", encoding="utf-8")
+    monkeypatch.setattr(worker_module, "__file__", str(package_dir / "worker.py"))
+
+    client = WebView2WorkerClient(project_root=tmp_path / "project")
+
+    assert client.worker_path == packaged_worker

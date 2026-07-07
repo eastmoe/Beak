@@ -206,6 +206,7 @@ tempCodeRunnerFile.py
 # Beak runtime state
 data/
 test_outputs/
+src/beak/webview2-worker/
 
 # .NET build outputs
 [Bb]in/

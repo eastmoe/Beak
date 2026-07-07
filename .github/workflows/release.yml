@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.0.1 or 0.0.1"
+        description: "Release tag, for example v0.0.2 or 0.0.2"
         required: true
         type: string
 
@@ -12,8 +12,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build Windows py${{ matrix.python-version }}
+  test:
+    name: Test Python ${{ matrix.python-version }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -29,6 +29,30 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Test Python package
+        run: |
+          python -m compileall src tests
+          python -m pytest -q
+
+  build:
+    name: Build Windows wheel
+    needs: test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -60,35 +84,42 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install build
-          python -m pip install -e ".[dev]"
-
-      - name: Test Python package
-        run: |
-          python -m compileall src tests
-          python -m pytest -q
 
       - name: Publish WebView2 worker
-        run: dotnet publish .\workers\Beak.WebView2Worker -c Release -r win-x64 --self-contained false
+        run: dotnet publish .\workers\Beak.WebView2Worker -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false
 
-      - name: Build Python distributions
-        run: python -m build
-
-      - name: Package release payload
+      - name: Stage WebView2 worker inside package
         shell: pwsh
         run: |
-          $name = "beak-$env:BEAK_RELEASE_TAG-windows-py${{ matrix.python-version }}"
-          "BEAK_RELEASE_ASSET=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
-          New-Item -ItemType Directory -Force -Path "release\$name" | Out-Null
-          Copy-Item dist\* "release\$name\"
-          Copy-Item README.md, LICENSE, requirements.txt "release\$name\"
-          Copy-Item -Recurse workers\Beak.WebView2Worker\bin\Release\net8.0-windows\win-x64\publish "release\$name\webview2-worker"
-          Compress-Archive -Path "release\$name\*" -DestinationPath "$name.zip" -Force
+          $source = "workers\Beak.WebView2Worker\bin\Release\net8.0-windows\win-x64\publish"
+          $target = "src\beak\webview2-worker"
+          if (-not (Test-Path "$source\Beak.WebView2Worker.exe")) {
+            throw "Published WebView2 worker executable was not found at $source."
+          }
+          Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item -Recurse "$source\*" $target
 
-      - name: Upload artifact
+      - name: Build Python wheel
+        run: python -m build --wheel
+
+      - name: Verify wheel payload
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No wheel was built."
+          }
+          if ($wheel.Name -notmatch 'win_amd64\.whl$') {
+            throw "Expected a Windows platform wheel, got $($wheel.Name)."
+          }
+          python -c "import sys, zipfile; wheel=sys.argv[1]; names=set(zipfile.ZipFile(wheel).namelist()); required={'beak/webview2-worker/Beak.WebView2Worker.exe','beak/webview2-worker/Beak.WebView2Worker.dll','beak/webview2-worker/Beak.WebView2Worker.deps.json','beak/webview2-worker/Beak.WebView2Worker.runtimeconfig.json','beak/webview2-worker/Microsoft.Web.WebView2.Core.dll','beak/webview2-worker/Microsoft.Web.WebView2.WinForms.dll','beak/webview2-worker/WebView2Loader.dll','beak/webview2-worker/coreclr.dll','beak/webview2-worker/hostfxr.dll','beak/webview2-worker/hostpolicy.dll','beak/webview2-worker/runtimes/win-x64/native/WebView2Loader.dll'}; missing=sorted(required-names); assert not missing, 'Missing wheel payload: '+', '.join(missing); print('Verified', wheel)" "$($wheel.FullName)"
+
+      - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: beak-windows-py${{ matrix.python-version }}
-          path: ${{ env.BEAK_RELEASE_ASSET }}
+          name: beak-windows-wheel
+          path: dist\*.whl
           if-no-files-found: error
 
   release:
@@ -127,9 +158,13 @@ jobs:
           $releaseExists = $LASTEXITCODE -eq 0
           $ErrorActionPreference = "Stop"
           if ($releaseExists) {
-            gh release upload $tag release-assets\*.zip --clobber
+            $zipAssets = gh release view $tag --json assets --jq '.assets[] | select(.name | endswith(".zip")) | .name'
+            foreach ($asset in $zipAssets) {
+              gh release delete-asset $tag $asset -y
+            }
+            gh release upload $tag release-assets\*.whl --clobber
           } else {
-            gh release create $tag release-assets\*.zip `
+            gh release create $tag release-assets\*.whl `
               --title $tag `
               --notes "Automated Beak release for $tag."
           }

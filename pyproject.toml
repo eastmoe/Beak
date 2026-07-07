@@ -1,6 +1,6 @@
 [project]
 name = "beak"
-version = "0.0.1"
+version = "0.0.2"
 description = "Windows WebView2 backed browser rendering crawler API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,11 +22,18 @@ dev = [
 beak = "beak.cli:main"
 
 [build-system]
-requires = ["setuptools>=70.0"]
+requires = ["setuptools>=70.0", "wheel>=0.43.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+beak = [
+  "webview2-worker/*",
+  "webview2-worker/*/*",
+  "webview2-worker/*/*/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
