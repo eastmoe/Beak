@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import uvicorn
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse
 
@@ -134,7 +133,9 @@ def _submit(request: RenderRequest, response: Response) -> RenderResult | JobAcc
 
 
 def run() -> None:
-    uvicorn.run("beak.main:app", host="127.0.0.1", port=8000, reload=False)
+    from .cli import run_server
+
+    run_server(host="127.0.0.1", port=8000)
 
 
 if __name__ == "__main__":

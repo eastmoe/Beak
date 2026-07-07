@@ -57,13 +57,31 @@ $env:BEAK_WEBVIEW2_WORKER = "D:\path\to\Beak.WebView2Worker.exe"
 ## Run
 
 ```powershell
-beak
+beak server
 ```
 
 or:
 
 ```powershell
-uvicorn beak.main:app --host 127.0.0.1 --port 8000
+beak server --host 127.0.0.1 --port 8000
+```
+
+Bind all IPv4 interfaces:
+
+```powershell
+beak server --host all --port 8000
+```
+
+Bind all IPv6 interfaces:
+
+```powershell
+beak server --host all-v6 --port 8000
+```
+
+Bind IPv6 localhost:
+
+```powershell
+beak server --host ::1 --port 8000
 ```
 
 Open API docs:
@@ -150,3 +168,9 @@ Proxy support is process/profile-level. Beak starts a separate WebView2 worker/u
 ## Notes
 
 WebView2 does not expose every Microsoft Edge "Save page as..." behavior as a simple stable API. Beak uses WebView2-native capture for WebView2 screenshots, Playwright screenshot capture for `engine=edge`, DevTools `Page.captureSnapshot` for `single_file` MHTML, and captured network bodies plus rendered DOM rewriting for `complete_page`. Some cross-origin or cache-only resources may not be available after page load; the ZIP still includes the rendered HTML and every captured response body available to the selected engine.
+
+## Release workflow
+
+The repository includes a manual GitHub Actions workflow at `.github/workflows/release.yml`.
+
+Run it from GitHub Actions with a tag such as `v0.1.0` or `0.1.0`. It builds on `windows-latest` for Python `3.11`, `3.12`, `3.13`, and `3.14`, publishes the WebView2 worker, runs tests, builds Python distributions, uploads per-version ZIP artifacts, creates the tag, and publishes the ZIPs to the matching GitHub Release.

@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-beak = "beak.main:run"
+beak = "beak.cli:main"
 
 [build-system]
 requires = ["setuptools>=70.0"]
