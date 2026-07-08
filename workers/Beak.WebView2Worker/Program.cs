@@ -119,6 +119,9 @@ internal sealed partial class WorkerForm : Form
             "screenshot" => await ExportScreenshotAsync(),
             "single_file" => await ExportSingleFileAsync(),
             "complete_page" => await ExportCompletePageAsync(html),
+            "semantic_markdown" => await ExportSemanticMarkdownAsync(),
+            "semantic_jsonl" => await ExportSemanticJsonlAsync(),
+            "accessibility_yaml" => throw new NotSupportedException("accessibility_yaml requires engine=edge because it uses Playwright aria_snapshot."),
             _ => throw new NotSupportedException($"Unsupported output type: {_input.Output}"),
         };
     }
@@ -246,6 +249,12 @@ internal sealed partial class WorkerForm : Form
         return JsonSerializer.Deserialize<string>(json) ?? string.Empty;
     }
 
+    private async Task<JsonDocument> GetSemanticDomAsync()
+    {
+        string json = await _webView.CoreWebView2.ExecuteScriptAsync(SemanticDomScript);
+        return JsonDocument.Parse(json);
+    }
+
     private async Task<WorkerResult> ExportRenderedHtmlAsync(string html)
     {
         string path = Path.Combine(_input.OutputDir, "rendered.html");
@@ -348,6 +357,36 @@ internal sealed partial class WorkerForm : Form
             metadata: metadata);
     }
 
+    private async Task<WorkerResult> ExportSemanticMarkdownAsync()
+    {
+        using JsonDocument doc = await GetSemanticDomAsync();
+        string path = Path.Combine(_input.OutputDir, "semantic.md");
+        await File.WriteAllTextAsync(path, SemanticItemsToMarkdown(doc.RootElement), Encoding.UTF8);
+
+        Dictionary<string, object?> metadata = BaseMetadata();
+        metadata["semantic_node_count"] = doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
+        return WorkerResult.Ok(
+            _input.Output,
+            htmlPath: null,
+            artifacts: [new WorkerArtifact("semantic_markdown", "text/markdown; charset=utf-8", path)],
+            metadata: metadata);
+    }
+
+    private async Task<WorkerResult> ExportSemanticJsonlAsync()
+    {
+        using JsonDocument doc = await GetSemanticDomAsync();
+        string path = Path.Combine(_input.OutputDir, "semantic.jsonl");
+        await File.WriteAllTextAsync(path, SemanticItemsToJsonl(doc.RootElement), Encoding.UTF8);
+
+        Dictionary<string, object?> metadata = BaseMetadata();
+        metadata["semantic_node_count"] = doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
+        return WorkerResult.Ok(
+            _input.Output,
+            htmlPath: null,
+            artifacts: [new WorkerArtifact("semantic_jsonl", "application/x-ndjson; charset=utf-8", path)],
+            metadata: metadata);
+    }
+
     private Dictionary<string, object?> BaseMetadata() => new()
     {
         ["url"] = _input.Url,
@@ -425,8 +464,187 @@ internal sealed partial class WorkerForm : Form
         };
     }
 
+    private static string SemanticItemsToJsonl(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        StringBuilder builder = new();
+        foreach (JsonElement item in root.EnumerateArray())
+        {
+            builder.AppendLine(JsonSerializer.Serialize(item));
+        }
+
+        return builder.ToString();
+    }
+
+    private static string SemanticItemsToMarkdown(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        List<string> lines = [];
+        string? previous = null;
+        foreach (JsonElement item in root.EnumerateArray())
+        {
+            string tag = JsonString(item, "tag");
+            string text = DisplayText(item);
+            if (string.IsNullOrWhiteSpace(text) && tag != "img")
+            {
+                continue;
+            }
+
+            string line;
+            if (tag.Length == 2 && tag[0] == 'h' && char.IsDigit(tag[1]))
+            {
+                int level = Math.Clamp(tag[1] - '0', 1, 6);
+                line = $"{new string('#', level)} {text}";
+            }
+            else if (tag == "li")
+            {
+                line = $"- {text}";
+            }
+            else if (tag == "a")
+            {
+                string href = JsonString(item, "href");
+                line = string.IsNullOrWhiteSpace(href) ? text : $"[{text}]({href})";
+            }
+            else if (tag == "img")
+            {
+                string alt = string.IsNullOrWhiteSpace(text) ? "image" : text;
+                line = $"![{EscapeBrackets(alt)}]({JsonString(item, "src")})";
+            }
+            else if (tag == "button")
+            {
+                line = $"[button] {text}";
+            }
+            else if (tag is "input" or "textarea" or "select")
+            {
+                string name = JsonString(item, "name");
+                string value = JsonString(item, "value");
+                line = $"[{tag}: {(string.IsNullOrWhiteSpace(name) ? tag : name)}]" + (string.IsNullOrWhiteSpace(value) ? string.Empty : $" {value}");
+            }
+            else if (tag == "blockquote")
+            {
+                line = "> " + text.Replace("\n", "\n> ");
+            }
+            else if (tag == "pre")
+            {
+                line = $"```\n{text}\n```";
+            }
+            else if (!string.IsNullOrWhiteSpace(JsonString(item, "role")) && tag is not ("p" or "td" or "th" or "caption"))
+            {
+                line = $"[{JsonString(item, "role")}] {text}";
+            }
+            else
+            {
+                line = text;
+            }
+
+            if (line != previous)
+            {
+                lines.Add(line);
+                previous = line;
+            }
+        }
+
+        return lines.Count == 0 ? string.Empty : string.Join("\n\n", lines) + "\n";
+    }
+
+    private static string DisplayText(JsonElement item)
+    {
+        foreach (string key in new[] { "text", "aria_label", "alt", "title", "name", "value" })
+        {
+            string value = JsonString(item, key);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string JsonString(JsonElement item, string name)
+    {
+        if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty(name, out JsonElement value))
+        {
+            return string.Empty;
+        }
+
+        return value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString();
+    }
+
+    private static string EscapeBrackets(string value) => value.Replace("[", "\\[").Replace("]", "\\]");
+
     [GeneratedRegex("(?<prefix>\\b(?:src|href)\\s*=\\s*[\"'])(?<url>[^\"']+)(?<suffix>[\"'])", RegexOptions.IgnoreCase)]
     private static partial Regex ResourceAttributeRegex();
+
+    private const string SemanticDomScript =
+        """
+        (() => {
+          const selector = [
+            "main", "article", "section", "nav", "header", "footer",
+            "h1", "h2", "h3", "h4", "h5", "h6", "p", "li",
+            "a", "button", "input", "textarea", "select", "label",
+            "table", "caption", "th", "td", "blockquote", "pre", "code",
+            "img", "figure", "figcaption", "summary", "details",
+            "[role]", "[aria-label]", "[alt]", "[title]"
+          ].join(",");
+          const blockTags = new Set(["MAIN", "ARTICLE", "SECTION", "NAV", "HEADER", "FOOTER", "FIGURE", "DETAILS"]);
+          const contentTags = new Set(["H1", "H2", "H3", "H4", "H5", "H6", "P", "LI", "A", "BUTTON", "INPUT", "TEXTAREA", "SELECT", "LABEL", "CAPTION", "TH", "TD", "BLOCKQUOTE", "PRE", "CODE", "IMG", "FIGCAPTION", "SUMMARY"]);
+          function visible(el) {
+            if (!(el instanceof HTMLElement)) return false;
+            if (el.closest("[aria-hidden='true'],script,style,noscript,template")) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+            const rects = el.getClientRects();
+            if (!rects || rects.length === 0) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+          function clean(text) {
+            return (text || "").replace(/\s+/g, " ").trim();
+          }
+          function pathFor(el) {
+            const parts = [];
+            let current = el;
+            while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+              let part = current.tagName.toLowerCase();
+              if (current.id) part += "#" + current.id;
+              else if (current.classList && current.classList.length) part += "." + Array.from(current.classList).slice(0, 2).join(".");
+              parts.unshift(part);
+              current = current.parentElement;
+            }
+            return parts.join(" > ");
+          }
+          return Array.from(document.querySelectorAll(selector))
+            .filter(visible)
+            .map((el, index) => {
+              const tag = el.tagName.toLowerCase();
+              const role = el.getAttribute("role") || null;
+              const ariaLabel = clean(el.getAttribute("aria-label"));
+              const title = clean(el.getAttribute("title"));
+              const alt = clean(el.getAttribute("alt"));
+              const href = el.href || el.getAttribute("href") || null;
+              const src = el.currentSrc || el.src || el.getAttribute("src") || null;
+              const name = clean(el.getAttribute("name") || el.getAttribute("placeholder"));
+              const value = ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ? clean(el.value) : "";
+              let text = clean(el.innerText || el.textContent);
+              if (blockTags.has(el.tagName)) text = ariaLabel || title || role || "";
+              if (!contentTags.has(el.tagName) && !role && !ariaLabel && !title) return null;
+              const item = { index, tag, role, text: text.slice(0, 4000), aria_label: ariaLabel || null, title: title || null, alt: alt || null, href, src, name: name || null, value: value || null, path: pathFor(el) };
+              const level = /^h[1-6]$/.test(tag) ? Number(tag.slice(1)) : null;
+              if (level) item.level = level;
+              return item;
+            })
+            .filter((item) => item && (item.text || item.aria_label || item.alt || item.href || item.src || item.role));
+        })()
+        """;
 }
 
 internal sealed class NetworkTracker

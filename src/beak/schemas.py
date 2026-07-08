@@ -12,6 +12,9 @@ class OutputType(StrEnum):
     SCREENSHOT = "screenshot"
     COMPLETE_PAGE = "complete_page"
     SINGLE_FILE = "single_file"
+    SEMANTIC_MARKDOWN = "semantic_markdown"
+    SEMANTIC_JSONL = "semantic_jsonl"
+    ACCESSIBILITY_YAML = "accessibility_yaml"
 
 
 class BrowserEngine(StrEnum):

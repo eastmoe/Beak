@@ -6,6 +6,7 @@ from beak.history import HistoryStore
 from beak.jobs import JobManager
 from beak.main import app
 from beak.schemas import BrowserEngine, JobStatus, OutputType, RenderRequest, WorkerArtifact, WorkerResult
+from beak.semantic import semantic_items_to_jsonl, semantic_items_to_markdown
 from beak.worker import WebView2WorkerClient
 import beak.worker as worker_module
 import beak.client as client_module
@@ -43,6 +44,29 @@ def test_browser_engine_accepts_edge():
     request = RenderRequest(url="https://example.com", engine=BrowserEngine.EDGE)
 
     assert request.engine == BrowserEngine.EDGE
+
+
+def test_output_type_accepts_semantic_exports():
+    assert RenderRequest(url="https://example.com", output="semantic_markdown").output == OutputType.SEMANTIC_MARKDOWN
+    assert RenderRequest(url="https://example.com", output="semantic_jsonl").output == OutputType.SEMANTIC_JSONL
+    assert RenderRequest(url="https://example.com", engine="edge", output="accessibility_yaml").output == OutputType.ACCESSIBILITY_YAML
+
+
+def test_semantic_formatters_emit_markdown_and_jsonl():
+    items = [
+        {"tag": "h1", "text": "Title"},
+        {"tag": "a", "text": "Docs", "href": "https://example.com/docs"},
+        {"tag": "button", "text": "Save"},
+    ]
+
+    markdown = semantic_items_to_markdown(items)
+    jsonl = semantic_items_to_jsonl(items)
+
+    assert "# Title" in markdown
+    assert "[Docs](https://example.com/docs)" in markdown
+    assert "[button] Save" in markdown
+    assert jsonl.count("\n") == 3
+    assert '"tag":"h1"' in jsonl
 
 
 def test_render_request_accepts_request_level_options(tmp_path):

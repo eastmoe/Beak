@@ -327,8 +327,9 @@ def _mcp_tools() -> list[dict[str, Any]]:
             "title": "Render or capture a webpage",
             "description": (
                 "Render a URL with WebView2 or headless Edge and return rendered HTML, a screenshot, "
-                "a single-file MHTML snapshot, or a complete-page ZIP. Supports per-request timeout, "
-                "proxy, cookies, SSL-error skipping, and custom artifact output directories."
+                "a single-file MHTML snapshot, a complete-page ZIP, visible semantic DOM as Markdown/JSONL, "
+                "or a Playwright ARIA accessibility YAML snapshot. Supports per-request timeout, proxy, "
+                "cookies, SSL-error skipping, and custom artifact output directories."
             ),
             "inputSchema": RenderRequest.model_json_schema(mode="validation"),
         },

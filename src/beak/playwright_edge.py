@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from .schemas import OutputType, RenderRequest, WorkerArtifact, WorkerResult
+from .semantic import SEMANTIC_DOM_SCRIPT, semantic_items_to_jsonl, semantic_items_to_markdown
 from .worker import WorkerError
 
 
@@ -129,6 +130,10 @@ class EdgePlaywrightClient:
                     return self._export_single_file(context, page, request, job_dir, user_data_dir)
                 if request.output == OutputType.COMPLETE_PAGE:
                     return self._export_complete_page(request, job_dir, user_data_dir, html, responses)
+                if request.output in {OutputType.SEMANTIC_MARKDOWN, OutputType.SEMANTIC_JSONL}:
+                    return self._export_semantic_dom(page, request, job_dir)
+                if request.output == OutputType.ACCESSIBILITY_YAML:
+                    return self._export_accessibility_yaml(page, request, job_dir)
                 raise WorkerError(f"Unsupported output type: {request.output}")
             except PlaywrightTimeoutError as exc:
                 raise WorkerError(f"Playwright Edge timed out after {timeout_ms}ms: {exc}") from exc
@@ -267,6 +272,43 @@ class EdgePlaywrightClient:
                 WorkerArtifact(name="complete_page_index", content_type="text/html; charset=utf-8", path=str(index_path)),
             ],
             metadata=metadata,
+        )
+
+    def _export_semantic_dom(self, page: Any, request: RenderRequest, job_dir: Path) -> WorkerResult:
+        items = page.evaluate(SEMANTIC_DOM_SCRIPT)
+        if not isinstance(items, list):
+            items = []
+
+        if request.output == OutputType.SEMANTIC_MARKDOWN:
+            path = job_dir / "semantic.md"
+            content = semantic_items_to_markdown(items)
+            content_type = "text/markdown; charset=utf-8"
+            artifact_name = "semantic_markdown"
+        else:
+            path = job_dir / "semantic.jsonl"
+            content = semantic_items_to_jsonl(items)
+            content_type = "application/x-ndjson; charset=utf-8"
+            artifact_name = "semantic_jsonl"
+
+        path.write_text(content, encoding="utf-8")
+        metadata = self._metadata(request, None)
+        metadata["semantic_node_count"] = len(items)
+        return WorkerResult(
+            success=True,
+            output=request.output,
+            artifacts=[WorkerArtifact(name=artifact_name, content_type=content_type, path=str(path))],
+            metadata=metadata,
+        )
+
+    def _export_accessibility_yaml(self, page: Any, request: RenderRequest, job_dir: Path) -> WorkerResult:
+        snapshot = page.locator("body").aria_snapshot(timeout=request.timeout_ms)
+        path = job_dir / "accessibility.yaml"
+        path.write_text(snapshot, encoding="utf-8")
+        return WorkerResult(
+            success=True,
+            output=request.output,
+            artifacts=[WorkerArtifact(name="accessibility_yaml", content_type="application/yaml; charset=utf-8", path=str(path))],
+            metadata=self._metadata(request, None),
         )
 
     @staticmethod
