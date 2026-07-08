@@ -1,7 +1,9 @@
 import threading
+import json
 
 from beak import BeakClient
 from beak.cli import build_parser, normalize_bind_host
+from beak.config import ConfigManager, UrlSafetyError
 from beak.history import HistoryStore
 from beak.jobs import JobManager
 from beak.main import app
@@ -10,6 +12,7 @@ from beak.semantic import semantic_items_to_jsonl, semantic_items_to_markdown
 from beak.worker import WebView2WorkerClient
 import beak.worker as worker_module
 import beak.client as client_module
+import beak.config as config_module
 import beak.main as main_module
 from fastapi.testclient import TestClient
 
@@ -80,6 +83,67 @@ def test_render_request_accepts_request_level_options(tmp_path):
     assert request.timeout_ms == 12345
     assert request.ignore_https_errors is True
     assert request.output_dir == tmp_path / "captures"
+
+
+def test_config_applies_domain_defaults_only_when_omitted(tmp_path):
+    config_path = tmp_path / "beak.config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "domain_rules": [
+                    {
+                        "patterns": ["*.example.com"],
+                        "defaults": {
+                            "timeout_ms": 60000,
+                            "ignore_https_errors": True,
+                            "proxy": {"server": "http://127.0.0.1:7890"},
+                            "cookies": [{"name": "sessionid", "value": "abc", "domain": "example.com"}],
+                            "output_dir": "captures/example",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ConfigManager(config_path)
+
+    request = RenderRequest(url="https://www.example.com", timeout_ms=12345)
+    merged = manager.apply(request)
+
+    assert merged.timeout_ms == 12345
+    assert merged.ignore_https_errors is True
+    assert merged.proxy is not None
+    assert merged.proxy.server == "http://127.0.0.1:7890"
+    assert merged.cookies[0].name == "sessionid"
+    assert merged.output_dir is not None
+    assert str(merged.output_dir).replace("\\", "/") == "captures/example"
+
+
+def test_config_url_safety_blocks_denied_domain(tmp_path):
+    config_path = tmp_path / "beak.config.json"
+    config_path.write_text(
+        json.dumps({"safety": {"enabled": True, "denied_domains": ["*.blocked.test"]}}),
+        encoding="utf-8",
+    )
+    manager = ConfigManager(config_path)
+
+    try:
+        manager.apply(RenderRequest(url="https://a.blocked.test"))
+    except UrlSafetyError as exc:
+        assert "denied" in str(exc)
+    else:
+        raise AssertionError("URL safety policy should block denied domains")
+
+
+def test_config_manager_creates_default_user_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module.Path, "home", staticmethod(lambda: tmp_path))
+
+    manager = ConfigManager.from_paths(explicit_path=None, data_dir=tmp_path / "data")
+
+    assert manager.path == tmp_path / ".beak" / "config.json"
+    assert manager.path.exists()
+    assert '"domain_rules"' in manager.read_text()
 
 
 def test_job_manager_uses_custom_output_dir(tmp_path):
@@ -246,6 +310,7 @@ def test_webui_root_serves_html():
 
     assert response.status_code == 200
     assert "Beak WebUI" in response.text
+    assert "本地配置" in response.text
 
 
 def test_jobs_and_history_api_with_patched_manager(tmp_path, monkeypatch):
@@ -276,6 +341,67 @@ def test_jobs_and_history_api_with_patched_manager(tmp_path, monkeypatch):
     assert jobs["jobs"][0]["job_id"] == accepted["job_id"]
     assert history_response["items"][0]["job_id"] == accepted["job_id"]
     assert deleted["deleted"] is True
+
+
+def test_render_api_applies_config_defaults(tmp_path, monkeypatch):
+    class DummyWorker:
+        seen_request = None
+
+        def invoke(self, *, job_id, request, job_dir, user_data_dir, cancel_event=None):  # noqa: ANN001
+            self.seen_request = request
+            job_dir.mkdir(parents=True, exist_ok=True)
+            path = job_dir / "rendered.html"
+            path.write_text("<html></html>", encoding="utf-8")
+            return WorkerResult(
+                success=True,
+                output=request.output,
+                html_path=str(path),
+                artifacts=[WorkerArtifact(name="rendered_html", content_type="text/html; charset=utf-8", path=str(path))],
+            )
+
+    config_path = tmp_path / "beak.config.json"
+    config_path.write_text(
+        json.dumps({"domain_rules": [{"patterns": ["example.com"], "defaults": {"timeout_ms": 45678}}]}),
+        encoding="utf-8",
+    )
+    worker = DummyWorker()
+    manager = JobManager(data_dir=tmp_path / "data", worker=worker)  # type: ignore[arg-type]
+    monkeypatch.setattr(main_module, "JOBS", manager)
+    monkeypatch.setattr(main_module, "CONFIG", ConfigManager(config_path))
+    client = TestClient(app)
+
+    response = client.post("/render", json={"url": "https://example.com", "output": "rendered_html"})
+
+    assert response.status_code == 200
+    assert worker.seen_request.timeout_ms == 45678
+
+
+def test_config_api_reads_and_updates_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    manager = ConfigManager(config_path)
+    monkeypatch.setattr(main_module, "CONFIG", manager)
+    client = TestClient(app)
+
+    content = json.dumps(
+        {"domain_rules": [{"patterns": ["example.com"], "defaults": {"timeout_ms": 34567}}]},
+        indent=2,
+    )
+    put_response = client.put("/config", json={"content": content})
+    get_response = client.get("/config")
+
+    assert put_response.status_code == 200
+    assert get_response.json()["path"] == str(config_path)
+    assert manager.apply(RenderRequest(url="https://example.com")).timeout_ms == 34567
+
+
+def test_config_api_rejects_invalid_config(tmp_path, monkeypatch):
+    manager = ConfigManager(tmp_path / "config.json")
+    monkeypatch.setattr(main_module, "CONFIG", manager)
+    client = TestClient(app)
+
+    response = client.put("/config", json={"content": "{not json"})
+
+    assert response.status_code == 400
 
 
 def test_python_client_posts_json(monkeypatch):

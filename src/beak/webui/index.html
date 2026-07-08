@@ -262,6 +262,21 @@
         </div>
       </section>
     </div>
+
+    <section class="stack">
+      <div class="toolbar">
+        <h2>本地配置</h2>
+        <button id="reloadConfig">重新加载</button>
+      </div>
+      <div id="configPath" class="muted mono"></div>
+      <label>config.json
+        <textarea id="configText" spellcheck="false" style="min-height: 260px;"></textarea>
+      </label>
+      <div class="row">
+        <button id="saveConfig" class="primary">保存配置</button>
+      </div>
+      <div id="configMessage" class="message"></div>
+    </section>
   </main>
 
   <script>
@@ -271,6 +286,11 @@
     function setMessage(text, error = false) {
       $("message").textContent = text || "";
       $("message").style.color = error ? "var(--danger)" : "var(--muted)";
+    }
+
+    function setConfigMessage(text, error = false) {
+      $("configMessage").textContent = text || "";
+      $("configMessage").style.color = error ? "var(--danger)" : "var(--muted)";
     }
 
     async function api(path, options = {}) {
@@ -341,6 +361,31 @@
       ]);
       renderJobs(jobs.jobs || []);
       renderHistory(history.items || []);
+    }
+
+    async function loadConfig() {
+      const config = await api("/config");
+      $("configPath").textContent = config.path || "";
+      $("configText").value = config.content || "";
+      setConfigMessage("");
+    }
+
+    async function saveConfig() {
+      setConfigMessage("");
+      $("saveConfig").disabled = true;
+      try {
+        const config = await api("/config", {
+          method: "PUT",
+          body: JSON.stringify({ content: $("configText").value }),
+        });
+        $("configPath").textContent = config.path || "";
+        $("configText").value = config.content || "";
+        setConfigMessage("配置已保存并重新加载");
+      } catch (error) {
+        setConfigMessage(error.message, true);
+      } finally {
+        $("saveConfig").disabled = false;
+      }
     }
 
     function buildRequest() {
@@ -416,8 +461,11 @@
       await api("/history", { method: "DELETE" });
       await refreshAll();
     });
+    $("reloadConfig").addEventListener("click", () => loadConfig().catch((error) => setConfigMessage(error.message, true)));
+    $("saveConfig").addEventListener("click", saveConfig);
 
     refreshAll().catch((error) => setMessage(error.message, true));
+    loadConfig().catch((error) => setConfigMessage(error.message, true));
     resetTimer();
   </script>
 </body>

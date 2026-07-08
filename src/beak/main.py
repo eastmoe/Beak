@@ -8,10 +8,11 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from . import __version__
 from .browser import BrowserRouter
+from .config import ConfigError, ConfigManager, UrlSafetyError
 from .history import HistoryStore
 from .jobs import JobManager, JobNotFound
 from .playwright_edge import EdgePlaywrightClient
@@ -21,6 +22,7 @@ from .worker import WebView2WorkerClient, WorkerError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("BEAK_DATA_DIR", PROJECT_ROOT / "data"))
+CONFIG = ConfigManager.from_paths(explicit_path=os.environ.get("BEAK_CONFIG_FILE"), data_dir=DATA_DIR)
 WEBVIEW_WORKER = WebView2WorkerClient(PROJECT_ROOT)
 EDGE_WORKER = EdgePlaywrightClient()
 BROWSERS = BrowserRouter(webview=WEBVIEW_WORKER, edge=EDGE_WORKER)
@@ -59,6 +61,10 @@ app = FastAPI(
 )
 
 
+class ConfigUpdateRequest(BaseModel):
+    content: str
+
+
 @app.get("/", include_in_schema=False)
 def webui() -> FileResponse:
     return FileResponse(Path(__file__).resolve().parent / "webui" / "index.html")
@@ -80,6 +86,28 @@ def health() -> HealthResponse:
         edge_playwright_configured=EDGE_WORKER.is_configured,
         edge_executable_path=EDGE_WORKER.edge_executable_path(),
     )
+
+
+@app.get(
+    "/config",
+    tags=["config"],
+    summary="Get the active local configuration file.",
+)
+def get_config() -> dict[str, str]:
+    return {"path": str(CONFIG.path), "content": CONFIG.read_text()}
+
+
+@app.put(
+    "/config",
+    tags=["config"],
+    summary="Replace and reload the active local configuration file.",
+)
+def update_config(request: ConfigUpdateRequest) -> dict[str, str]:
+    try:
+        CONFIG.replace_text(request.content)
+    except ConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"path": str(CONFIG.path), "content": CONFIG.read_text()}
 
 
 @app.post(
@@ -199,7 +227,7 @@ def list_jobs(active_only: bool = False) -> JobListResponse:
     description="Queues a render request and returns immediately with a job id.",
 )
 def add_job(request: RenderRequest) -> JobAccepted:
-    queued_request = request.model_copy(update={"async_mode": True})
+    queued_request = _prepare_request(request).model_copy(update={"async_mode": True})
     job_id = JOBS.create_job(queued_request)
     return JobAccepted(job_id=job_id, status_url=f"/jobs/{job_id}")
 
@@ -289,6 +317,7 @@ def clear_history() -> dict[str, int]:
 
 
 def _submit(request: RenderRequest, response: Response) -> RenderResult | JobAccepted:
+    request = _prepare_request(request)
     if JOBS.should_run_async(request):
         job_id = JOBS.create_job(request)
         response.status_code = status.HTTP_202_ACCEPTED
@@ -298,6 +327,15 @@ def _submit(request: RenderRequest, response: Response) -> RenderResult | JobAcc
         return JOBS.run_sync(request)
     except WorkerError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+def _prepare_request(request: RenderRequest) -> RenderRequest:
+    try:
+        return CONFIG.apply(request)
+    except UrlSafetyError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 def _validate_mcp_origin(request: Request) -> None:
@@ -359,9 +397,11 @@ def _mcp_call_tool(request_id: Any, params: object) -> dict[str, Any]:
 
     if name == "beak_render":
         try:
-            render_request = RenderRequest.model_validate(arguments)
+            render_request = _prepare_request(RenderRequest.model_validate(arguments))
         except ValidationError as exc:
             return _json_rpc_error(request_id, -32602, "Invalid beak_render arguments", exc.errors())
+        except HTTPException as exc:
+            return _json_rpc_error(request_id, -32602, str(exc.detail))
         try:
             if JOBS.should_run_async(render_request):
                 job_id = JOBS.create_job(render_request)
