@@ -126,6 +126,11 @@ internal sealed partial class WorkerForm : Form
     private async Task InitializeWebViewAsync()
     {
         List<string> args = ["--no-first-run", "--disable-features=msSmartScreenProtection"];
+        if (_input.IgnoreHttpsErrors)
+        {
+            args.Add("--ignore-certificate-errors");
+            args.Add("--allow-insecure-localhost");
+        }
         if (_input.Proxy is not null)
         {
             args.Add($"--proxy-server={_input.Proxy.Server}");
@@ -144,6 +149,13 @@ internal sealed partial class WorkerForm : Form
 
         _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+        if (_input.IgnoreHttpsErrors)
+        {
+            _webView.CoreWebView2.ServerCertificateErrorDetected += (_, e) =>
+            {
+                e.Action = CoreWebView2ServerCertificateErrorAction.AlwaysAllow;
+            };
+        }
         if (!string.IsNullOrWhiteSpace(_input.UserAgent))
         {
             _webView.CoreWebView2.Settings.UserAgent = _input.UserAgent;
@@ -347,6 +359,7 @@ internal sealed partial class WorkerForm : Form
             ["device_scale_factor"] = _input.Viewport.DeviceScaleFactor,
         },
         ["proxy_isolated"] = _input.Proxy is not null,
+        ["ignore_https_errors"] = _input.IgnoreHttpsErrors,
         ["user_data_dir"] = _input.UserDataDir,
     };
 
@@ -536,6 +549,7 @@ internal sealed record WorkerInput(
     string JobId,
     string Url,
     int TimeoutMs,
+    bool IgnoreHttpsErrors,
     string WaitUntil,
     int AfterLoadMs,
     int NetworkIdleMs,

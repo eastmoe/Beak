@@ -121,7 +121,7 @@ class JobManager:
             raise
 
     def _execute(self, job_id: str, request: RenderRequest) -> RenderResult:
-        job_dir = self.jobs_dir / job_id
+        job_dir = self._job_dir(job_id, request)
         user_data_dir = self.profiles_dir / self._profile_key(job_id, request)
         try:
             worker_result = self.worker.invoke(
@@ -158,6 +158,14 @@ class JobManager:
             record.error = None
             record.updated_at = utc_now()
         return result
+
+    def _job_dir(self, job_id: str, request: RenderRequest) -> Path:
+        if request.output_dir is None:
+            return self.jobs_dir / job_id
+        output_dir = request.output_dir.expanduser()
+        if not output_dir.is_absolute():
+            output_dir = self.data_dir / output_dir
+        return output_dir
 
     def _artifact_from_worker(self, job_id: str, name: str, content_type: str, path: Path) -> Artifact:
         size = path.stat().st_size if path.exists() else None

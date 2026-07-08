@@ -92,6 +92,8 @@ Invoke-RestMethod http://127.0.0.1:8000/render `
     "url": "https://example.com",
     "engine": "webview",
     "output": "rendered_html",
+    "timeout_ms": 30000,
+    "ignore_https_errors": false,
     "wait": { "until": "network_idle", "after_load_ms": 500, "network_idle_ms": 800 }
   }'
 ```
@@ -105,6 +107,35 @@ $job = Invoke-RestMethod http://127.0.0.1:8000/render `
 
 Invoke-RestMethod "http://127.0.0.1:8000/jobs/$($job.job_id)"
 ```
+
+每个请求还可以单独控制超时、跳过证书错误，或者把 artifact 保存到指定服务端目录：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/render `
+  -Method Post -ContentType "application/json" `
+  -Body '{
+    "url": "https://self-signed.badssl.com/",
+    "engine": "edge",
+    "output": "screenshot",
+    "timeout_ms": 60000,
+    "ignore_https_errors": true,
+    "output_dir": "captures/self-signed"
+  }'
+```
+
+`output_dir` 是服务端路径；相对路径会放到 `BEAK_DATA_DIR` 下面，绝对路径则按原样使用。
+
+## MCP
+
+Beak 同时暴露 `/mcp`，可以作为 Streamable HTTP MCP server 供支持 MCP 的 LLM 客户端调用：
+
+- `GET /mcp`：查看 Beak 的 MCP 声明和工具 schema。
+- `POST /mcp`：发送 MCP JSON-RPC 请求，支持 `initialize`、`tools/list`、`tools/call`。
+
+当前暴露两个工具：
+
+- `beak_render`：参数与 `/render` 请求体一致。
+- `beak_get_job`：按 `job_id` 查询异步任务状态。
 
 更多参数（代理、UA、viewport、等待策略），请直接翻API的 `/docs`。
 
@@ -138,10 +169,6 @@ Beak/
 
 ## To do
 
-- ssl证书验证跳过
-- mcp配置集成
-- 请求级别的超时控制
-- 本地文件输出路径配置
 - 简易webui
 - Python client SDK
 - 基于域名匹配策略的配置文件

@@ -132,6 +132,7 @@ class WebView2WorkerClient:
             "job_id": job_id,
             "url": str(request.url),
             "timeout_ms": request.timeout_ms,
+            "ignore_https_errors": request.ignore_https_errors,
             "wait_until": request.wait.until,
             "after_load_ms": request.wait.after_load_ms,
             "network_idle_ms": request.wait.network_idle_ms,

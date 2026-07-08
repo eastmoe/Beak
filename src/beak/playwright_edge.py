@@ -80,7 +80,7 @@ class EdgePlaywrightClient:
                 "headless": True,
                 "viewport": {"width": request.viewport.width, "height": request.viewport.height},
                 "device_scale_factor": request.viewport.device_scale_factor,
-                "ignore_https_errors": False,
+                "ignore_https_errors": request.ignore_https_errors,
             }
             if request.user_agent:
                 launch_options["user_agent"] = request.user_agent
@@ -302,6 +302,7 @@ class EdgePlaywrightClient:
             "wait_until": request.wait.until,
             "viewport": request.viewport.model_dump(mode="json"),
             "proxy_isolated": request.proxy is not None,
+            "ignore_https_errors": request.ignore_https_errors,
             "user_data_dir": str(user_data_dir) if user_data_dir else None,
             "captured_at_unix": int(time.time()),
         }

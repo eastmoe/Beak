@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -113,6 +114,20 @@ class RenderRequest(BaseModel):
         int,
         Field(ge=1_000, le=600_000, description="End-to-end browser task timeout."),
     ] = 30_000
+    ignore_https_errors: bool = Field(
+        default=False,
+        description="When true, skip TLS/SSL certificate validation errors for this request.",
+    )
+    output_dir: Annotated[
+        Path | None,
+        Field(
+            default=None,
+            description=(
+                "Optional server-side directory where artifacts for this request are saved. "
+                "Relative paths are resolved under BEAK_DATA_DIR."
+            ),
+        ),
+    ] = None
     wait: WaitStrategy = Field(default_factory=WaitStrategy)
     proxy: ProxyConfig | None = None
     cookies: list[CookieSpec] = Field(default_factory=list)
@@ -141,6 +156,7 @@ class RenderRequest(BaseModel):
                     "url": "https://example.com",
                     "engine": "webview",
                     "timeout_ms": 30000,
+                    "ignore_https_errors": False,
                     "wait": {"until": "network_idle", "after_load_ms": 500, "network_idle_ms": 800},
                     "proxy": {"server": "http://127.0.0.1:7890"},
                     "cookies": [{"name": "sessionid", "value": "abc123", "domain": "example.com"}],
@@ -160,6 +176,16 @@ class RenderRequest(BaseModel):
             return None
         value = value.strip()
         return value or None
+
+    @field_validator("output_dir", mode="before")
+    @classmethod
+    def normalize_output_dir(cls, value: object) -> Path | None:
+        if value is None:
+            return None
+        value = str(value).strip()
+        if not value:
+            return None
+        return Path(value)
 
 
 class Artifact(BaseModel):
