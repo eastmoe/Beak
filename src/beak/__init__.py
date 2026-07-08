@@ -1,5 +1,7 @@
 """Beak browser rendering service."""
 
-__all__ = ["__version__"]
+from .client import BeakClient, BeakClientError
+
+__all__ = ["BeakClient", "BeakClientError", "__version__"]
 
 __version__ = "0.0.2"

@@ -36,6 +36,7 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class Viewport(BaseModel):
@@ -219,6 +220,27 @@ class JobInfo(BaseModel):
     updated_at: str
     error: str | None = None
     result: RenderResult | None = None
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobInfo] = Field(default_factory=list)
+
+
+class HistoryRecord(BaseModel):
+    job_id: str
+    status: JobStatus
+    output: OutputType
+    url: str
+    engine: BrowserEngine
+    created_at: str
+    updated_at: str
+    error: str | None = None
+    artifacts: list[Artifact] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HistoryListResponse(BaseModel):
+    items: list[HistoryRecord] = Field(default_factory=list)
 
 
 class WorkerArtifact(BaseModel):

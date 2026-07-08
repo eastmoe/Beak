@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from .playwright_edge import EdgePlaywrightClient
@@ -19,8 +20,20 @@ class BrowserRouter:
         request: RenderRequest,
         job_dir: Path,
         user_data_dir: Path,
+        cancel_event: threading.Event | None = None,
     ) -> WorkerResult:
         if request.engine == BrowserEngine.EDGE:
-            return self.edge.invoke(job_id=job_id, request=request, job_dir=job_dir, user_data_dir=user_data_dir)
-        return self.webview.invoke(job_id=job_id, request=request, job_dir=job_dir, user_data_dir=user_data_dir)
-
+            return self.edge.invoke(
+                job_id=job_id,
+                request=request,
+                job_dir=job_dir,
+                user_data_dir=user_data_dir,
+                cancel_event=cancel_event,
+            )
+        return self.webview.invoke(
+            job_id=job_id,
+            request=request,
+            job_dir=job_dir,
+            user_data_dir=user_data_dir,
+            cancel_event=cancel_event,
+        )

@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ class WebView2WorkerClient:
         request: RenderRequest,
         job_dir: Path,
         user_data_dir: Path,
+        cancel_event: threading.Event | None = None,
     ) -> WorkerResult:
         job_dir.mkdir(parents=True, exist_ok=True)
         user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -45,20 +48,13 @@ class WebView2WorkerClient:
         command = self._build_command(request_path)
         timeout_seconds = max(1, int(request.timeout_ms / 1000) + 20)
         try:
-            completed = subprocess.run(
+            completed = self._run_command(
                 command,
-                cwd=str(self.project_root),
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
-                encoding="utf-8",
-                errors="replace",
+                timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
             )
         except FileNotFoundError as exc:
             raise WorkerError(self._missing_worker_message()) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise WorkerError(f"WebView2 worker exceeded timeout after {timeout_seconds}s.") from exc
 
         if completed.returncode != 0:
             stderr = completed.stderr.strip()
@@ -81,6 +77,37 @@ class WebView2WorkerClient:
             return [dotnet, "run", "--project", str(project), "--", "--request", str(request_path)]
 
         raise WorkerError(self._missing_worker_message())
+
+    def _run_command(
+        self,
+        command: list[str],
+        *,
+        timeout_seconds: int,
+        cancel_event: threading.Event | None,
+    ) -> subprocess.CompletedProcess[str]:
+        started_at = time.monotonic()
+        process = subprocess.Popen(
+            command,
+            cwd=str(self.project_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=0.2)
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                if cancel_event is not None and cancel_event.is_set():
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    raise WorkerError("WebView2 worker was cancelled.") from None
+                if time.monotonic() - started_at > timeout_seconds:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    raise WorkerError(f"WebView2 worker exceeded timeout after {timeout_seconds}s.") from None
 
     def _missing_worker_message(self) -> str:
         return (

@@ -12,9 +12,10 @@ from pydantic import ValidationError
 
 from . import __version__
 from .browser import BrowserRouter
+from .history import HistoryStore
 from .jobs import JobManager, JobNotFound
 from .playwright_edge import EdgePlaywrightClient
-from .schemas import HealthResponse, JobAccepted, JobInfo, RenderRequest, RenderResult
+from .schemas import HealthResponse, HistoryListResponse, JobAccepted, JobInfo, JobListResponse, RenderRequest, RenderResult
 from .worker import WebView2WorkerClient, WorkerError
 
 
@@ -23,7 +24,13 @@ DATA_DIR = Path(os.environ.get("BEAK_DATA_DIR", PROJECT_ROOT / "data"))
 WEBVIEW_WORKER = WebView2WorkerClient(PROJECT_ROOT)
 EDGE_WORKER = EdgePlaywrightClient()
 BROWSERS = BrowserRouter(webview=WEBVIEW_WORKER, edge=EDGE_WORKER)
-JOBS = JobManager(data_dir=DATA_DIR, worker=BROWSERS, max_workers=int(os.environ.get("BEAK_MAX_WORKERS", "4")))
+HISTORY = HistoryStore(DATA_DIR / "history.json")
+JOBS = JobManager(
+    data_dir=DATA_DIR,
+    worker=BROWSERS,
+    max_workers=int(os.environ.get("BEAK_MAX_WORKERS", "4")),
+    history=HISTORY,
+)
 MCP_PROTOCOL_VERSION = "2025-06-18"
 MCP_ALLOWED_ORIGINS_CONFIGURED = "BEAK_MCP_ALLOWED_ORIGINS" in os.environ
 MCP_ALLOWED_ORIGINS = {
@@ -50,6 +57,11 @@ app = FastAPI(
     contact={"name": "Beak API"},
     license_info={"name": "Apache-2.0"},
 )
+
+
+@app.get("/", include_in_schema=False)
+def webui() -> FileResponse:
+    return FileResponse(Path(__file__).resolve().parent / "webui" / "index.html")
 
 
 @app.get(
@@ -168,6 +180,31 @@ async def mcp_endpoint(request: Request) -> Response:
 
 
 @app.get(
+    "/jobs",
+    response_model=JobListResponse,
+    tags=["jobs"],
+    summary="List in-memory jobs.",
+    description="Returns current job records. Use active_only=true to show only queued and running jobs.",
+)
+def list_jobs(active_only: bool = False) -> JobListResponse:
+    return JobListResponse(jobs=JOBS.list_jobs(active_only=active_only))
+
+
+@app.post(
+    "/jobs",
+    response_model=JobAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["jobs"],
+    summary="Add an asynchronous render job.",
+    description="Queues a render request and returns immediately with a job id.",
+)
+def add_job(request: RenderRequest) -> JobAccepted:
+    queued_request = request.model_copy(update={"async_mode": True})
+    job_id = JOBS.create_job(queued_request)
+    return JobAccepted(job_id=job_id, status_url=f"/jobs/{job_id}")
+
+
+@app.get(
     "/jobs/{job_id}",
     response_model=JobInfo,
     responses={404: {"description": "Job not found."}},
@@ -179,6 +216,32 @@ def get_job(job_id: str) -> JobInfo:
         return JOBS.get(job_id)
     except JobNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found") from exc
+
+
+@app.post(
+    "/jobs/{job_id}/cancel",
+    response_model=JobInfo,
+    responses={404: {"description": "Job not found."}},
+    tags=["jobs"],
+    summary="Cancel a queued or running job.",
+)
+def cancel_job(job_id: str) -> JobInfo:
+    try:
+        return JOBS.cancel(job_id)
+    except JobNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found") from exc
+
+
+@app.delete(
+    "/jobs/{job_id}",
+    response_model=JobInfo,
+    responses={404: {"description": "Job not found."}},
+    tags=["jobs"],
+    summary="Cancel a queued or running job.",
+    description="Alias of POST /jobs/{job_id}/cancel for clients that model cancellation as deletion.",
+)
+def delete_job(job_id: str) -> JobInfo:
+    return cancel_job(job_id)
 
 
 @app.get(
@@ -194,6 +257,35 @@ def download_artifact(job_id: str, name: str) -> FileResponse:
     except JobNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="artifact not found") from exc
     return FileResponse(path)
+
+
+@app.get(
+    "/history",
+    response_model=HistoryListResponse,
+    tags=["history"],
+    summary="List persisted job history.",
+)
+def list_history(limit: int | None = None) -> HistoryListResponse:
+    normalized_limit = None if limit is None else max(1, min(limit, 1000))
+    return HistoryListResponse(items=HISTORY.list(limit=normalized_limit))
+
+
+@app.delete(
+    "/history/{job_id}",
+    tags=["history"],
+    summary="Delete one history record.",
+)
+def delete_history(job_id: str) -> dict[str, bool]:
+    return {"deleted": HISTORY.delete(job_id)}
+
+
+@app.delete(
+    "/history",
+    tags=["history"],
+    summary="Clear all history records.",
+)
+def clear_history() -> dict[str, int]:
+    return {"deleted": HISTORY.clear()}
 
 
 def _submit(request: RenderRequest, response: Response) -> RenderResult | JobAccepted:

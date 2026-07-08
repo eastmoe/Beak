@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beak WebUI</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --line: #d8dde3;
+      --text: #17202a;
+      --muted: #5b6673;
+      --accent: #0f766e;
+      --danger: #b42318;
+      --ok: #147a3d;
+      --warn: #9a6700;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1, h2 { margin: 0; }
+    h1 { font-size: 22px; }
+    h2 { font-size: 16px; }
+    main {
+      display: grid;
+      grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+      gap: 16px;
+      padding: 16px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .stack { display: grid; gap: 12px; }
+    .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+    input, select, textarea, button {
+      font: inherit;
+      border-radius: 6px;
+    }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      padding: 8px 9px;
+      background: #fff;
+      color: var(--text);
+    }
+    textarea {
+      min-height: 118px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+    }
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      padding: 8px 11px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button.danger {
+      color: var(--danger);
+      border-color: #f0b8b2;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .table-wrap { overflow: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 780px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      background: #fafbfc;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    .queued, .running { color: var(--warn); border-color: #e7c46d; }
+    .succeeded { color: var(--ok); border-color: #8fc79d; }
+    .failed, .cancelled { color: var(--danger); border-color: #f0b8b2; }
+    .muted { color: var(--muted); }
+    .message {
+      min-height: 20px;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+    .artifact-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Beak WebUI</h1>
+      <div class="muted">添加任务、查看队列与历史、终止任务、打开产物</div>
+    </div>
+    <div class="row">
+      <label class="row"><input id="realtime" type="checkbox" checked> 实时刷新</label>
+      <button id="refresh">刷新</button>
+      <a href="/docs" target="_blank" rel="noreferrer">API 文档</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="stack">
+      <h2>添加任务</h2>
+      <label>URL
+        <input id="url" value="https://example.com" autocomplete="url">
+      </label>
+      <div class="grid2">
+        <label>引擎
+          <select id="engine">
+            <option value="webview">webview</option>
+            <option value="edge">edge</option>
+          </select>
+        </label>
+        <label>产出
+          <select id="output">
+            <option value="rendered_html">rendered_html</option>
+            <option value="screenshot">screenshot</option>
+            <option value="single_file">single_file</option>
+            <option value="complete_page">complete_page</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid2">
+        <label>超时 ms
+          <input id="timeout" type="number" min="1000" max="600000" value="30000">
+        </label>
+        <label>等待
+          <select id="waitUntil">
+            <option value="load">load</option>
+            <option value="dom_content_loaded">dom_content_loaded</option>
+            <option value="network_idle">network_idle</option>
+            <option value="fixed_delay">fixed_delay</option>
+          </select>
+        </label>
+      </div>
+      <label>保存目录
+        <input id="outputDir" placeholder="可选，相对路径位于 BEAK_DATA_DIR 下">
+      </label>
+      <div class="row">
+        <label class="row"><input id="ignoreHttps" type="checkbox"> 跳过 SSL 证书验证</label>
+      </div>
+      <label>高级 JSON
+        <textarea id="advanced" spellcheck="false" placeholder='{"viewport":{"width":1365,"height":768}}'></textarea>
+      </label>
+      <div class="row">
+        <button id="submit" class="primary">添加任务</button>
+        <button id="clearForm">清空高级 JSON</button>
+      </div>
+      <div id="message" class="message"></div>
+    </section>
+
+    <div class="stack">
+      <section>
+        <div class="toolbar">
+          <h2>任务队列与状态</h2>
+          <label class="row"><input id="activeOnly" type="checkbox"> 只看运行中</label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>Job</th>
+                <th>产出</th>
+                <th>更新时间</th>
+                <th>产物</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="jobsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="toolbar">
+          <h2>历史记录</h2>
+          <button id="clearHistory" class="danger">清空历史</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>URL</th>
+                <th>Job</th>
+                <th>更新时间</th>
+                <th>产物</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = { timer: null };
+
+    function setMessage(text, error = false) {
+      $("message").textContent = text || "";
+      $("message").style.color = error ? "var(--danger)" : "var(--muted)";
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options,
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!response.ok) {
+        throw new Error((data && data.detail) || response.statusText);
+      }
+      return data;
+    }
+
+    function statusBadge(status) {
+      return `<span class="status ${status}">${status}</span>`;
+    }
+
+    function shortJob(jobId) {
+      return `<span class="mono" title="${jobId}">${jobId.slice(0, 10)}</span>`;
+    }
+
+    function formatTime(value) {
+      if (!value) return "";
+      return new Date(value).toLocaleString();
+    }
+
+    function artifactButtons(jobId, artifacts) {
+      if (!artifacts || artifacts.length === 0) return '<span class="muted">无</span>';
+      return `<div class="artifact-actions">${artifacts.map((artifact) => {
+        const href = artifact.download_url || `/jobs/${jobId}/artifact/${artifact.name}`;
+        return `<button type="button" data-open="${href}">${artifact.name}</button>`;
+      }).join("")}</div>`;
+    }
+
+    function renderJobs(items) {
+      $("jobsBody").innerHTML = items.map((job) => `
+        <tr>
+          <td>${statusBadge(job.status)}</td>
+          <td>${shortJob(job.job_id)}</td>
+          <td>${job.output}</td>
+          <td>${formatTime(job.updated_at)}</td>
+          <td>${artifactButtons(job.job_id, job.result && job.result.artifacts)}</td>
+          <td>
+            <button data-cancel="${job.job_id}" ${["succeeded", "failed", "cancelled"].includes(job.status) ? "disabled" : ""}>终止</button>
+          </td>
+        </tr>`).join("") || '<tr><td colspan="6" class="muted">暂无任务</td></tr>';
+    }
+
+    function renderHistory(items) {
+      $("historyBody").innerHTML = items.map((item) => `
+        <tr>
+          <td>${statusBadge(item.status)}</td>
+          <td class="mono">${item.url}</td>
+          <td>${shortJob(item.job_id)}</td>
+          <td>${formatTime(item.updated_at)}</td>
+          <td>${artifactButtons(item.job_id, item.artifacts)}</td>
+          <td><button data-delete-history="${item.job_id}">删除</button></td>
+        </tr>`).join("") || '<tr><td colspan="6" class="muted">暂无历史</td></tr>';
+    }
+
+    async function refreshAll() {
+      const activeOnly = $("activeOnly").checked ? "?active_only=true" : "";
+      const [jobs, history] = await Promise.all([
+        api(`/jobs${activeOnly}`),
+        api("/history?limit=200"),
+      ]);
+      renderJobs(jobs.jobs || []);
+      renderHistory(history.items || []);
+    }
+
+    function buildRequest() {
+      let advanced = {};
+      const raw = $("advanced").value.trim();
+      if (raw) advanced = JSON.parse(raw);
+      const outputDir = $("outputDir").value.trim();
+      return {
+        ...advanced,
+        url: $("url").value.trim(),
+        engine: $("engine").value,
+        output: $("output").value,
+        timeout_ms: Number($("timeout").value || 30000),
+        ignore_https_errors: $("ignoreHttps").checked,
+        wait: {
+          until: $("waitUntil").value,
+          after_load_ms: 500,
+          network_idle_ms: 800,
+          ...(advanced.wait || {}),
+        },
+        ...(outputDir ? { output_dir: outputDir } : {}),
+      };
+    }
+
+    async function submitJob() {
+      setMessage("");
+      $("submit").disabled = true;
+      try {
+        const accepted = await api("/jobs", { method: "POST", body: JSON.stringify(buildRequest()) });
+        setMessage(`已添加任务 ${accepted.job_id}`);
+        await refreshAll();
+      } catch (error) {
+        setMessage(error.message, true);
+      } finally {
+        $("submit").disabled = false;
+      }
+    }
+
+    function resetTimer() {
+      if (state.timer) window.clearInterval(state.timer);
+      state.timer = null;
+      if ($("realtime").checked) {
+        state.timer = window.setInterval(() => refreshAll().catch((error) => setMessage(error.message, true)), 2500);
+      }
+    }
+
+    document.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const openHref = target.getAttribute("data-open");
+      if (openHref) window.open(openHref, "_blank", "noopener");
+
+      const cancelId = target.getAttribute("data-cancel");
+      if (cancelId) {
+        target.setAttribute("disabled", "disabled");
+        await api(`/jobs/${cancelId}/cancel`, { method: "POST", body: "{}" });
+        await refreshAll();
+      }
+
+      const historyId = target.getAttribute("data-delete-history");
+      if (historyId) {
+        await api(`/history/${historyId}`, { method: "DELETE" });
+        await refreshAll();
+      }
+    });
+
+    $("submit").addEventListener("click", submitJob);
+    $("refresh").addEventListener("click", () => refreshAll().catch((error) => setMessage(error.message, true)));
+    $("activeOnly").addEventListener("change", () => refreshAll().catch((error) => setMessage(error.message, true)));
+    $("realtime").addEventListener("change", resetTimer);
+    $("clearForm").addEventListener("click", () => { $("advanced").value = ""; });
+    $("clearHistory").addEventListener("click", async () => {
+      await api("/history", { method: "DELETE" });
+      await refreshAll();
+    });
+
+    refreshAll().catch((error) => setMessage(error.message, true));
+    resetTimer();
+  </script>
+</body>
+</html>

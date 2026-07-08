@@ -5,6 +5,7 @@ import json
 import mimetypes
 import re
 import shutil
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -47,9 +48,16 @@ class EdgePlaywrightClient:
         request: RenderRequest,
         job_dir: Path,
         user_data_dir: Path,
+        cancel_event: threading.Event | None = None,
     ) -> WorkerResult:
         try:
-            return self._invoke(job_id=job_id, request=request, job_dir=job_dir, user_data_dir=user_data_dir)
+            return self._invoke(
+                job_id=job_id,
+                request=request,
+                job_dir=job_dir,
+                user_data_dir=user_data_dir,
+                cancel_event=cancel_event,
+            )
         except WorkerError:
             raise
         except Exception as exc:  # noqa: BLE001 - callers need a normalized browser failure.
@@ -62,6 +70,7 @@ class EdgePlaywrightClient:
         request: RenderRequest,
         job_dir: Path,
         user_data_dir: Path,
+        cancel_event: threading.Event | None,
     ) -> WorkerResult:
         try:
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -73,6 +82,7 @@ class EdgePlaywrightClient:
         user_data_dir.mkdir(parents=True, exist_ok=True)
         responses: list[Any] = []
         timeout_ms = request.timeout_ms
+        self._raise_if_cancelled(cancel_event)
 
         with sync_playwright() as playwright:
             launch_options: dict[str, Any] = {
@@ -99,13 +109,16 @@ class EdgePlaywrightClient:
                 page.on("response", lambda response: responses.append(response))
 
                 goto_wait = self._goto_wait_until(request)
+                self._raise_if_cancelled(cancel_event)
                 page.goto(str(request.url), wait_until=goto_wait, timeout=timeout_ms)
+                self._raise_if_cancelled(cancel_event)
                 if request.wait.until == "network_idle":
                     page.wait_for_load_state("networkidle", timeout=timeout_ms)
                 elif request.wait.until == "fixed_delay" and request.wait.fixed_delay_ms > 0:
                     page.wait_for_timeout(request.wait.fixed_delay_ms)
                 if request.wait.after_load_ms > 0:
                     page.wait_for_timeout(request.wait.after_load_ms)
+                self._raise_if_cancelled(cancel_event)
 
                 html = page.content()
                 if request.output == OutputType.RENDERED_HTML:
@@ -121,6 +134,11 @@ class EdgePlaywrightClient:
                 raise WorkerError(f"Playwright Edge timed out after {timeout_ms}ms: {exc}") from exc
             finally:
                 context.close()
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise WorkerError("Playwright Edge worker was cancelled.")
 
     @staticmethod
     def _goto_wait_until(request: RenderRequest) -> str:

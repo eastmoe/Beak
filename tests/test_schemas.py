@@ -1,9 +1,15 @@
+import threading
+
+from beak import BeakClient
 from beak.cli import build_parser, normalize_bind_host
+from beak.history import HistoryStore
 from beak.jobs import JobManager
 from beak.main import app
-from beak.schemas import BrowserEngine, OutputType, RenderRequest, WorkerArtifact, WorkerResult
+from beak.schemas import BrowserEngine, JobStatus, OutputType, RenderRequest, WorkerArtifact, WorkerResult
 from beak.worker import WebView2WorkerClient
 import beak.worker as worker_module
+import beak.client as client_module
+import beak.main as main_module
 from fastapi.testclient import TestClient
 
 
@@ -54,7 +60,7 @@ def test_render_request_accepts_request_level_options(tmp_path):
 
 def test_job_manager_uses_custom_output_dir(tmp_path):
     class DummyWorker:
-        def invoke(self, *, job_id, request, job_dir, user_data_dir):  # noqa: ANN001
+        def invoke(self, *, job_id, request, job_dir, user_data_dir, cancel_event=None):  # noqa: ANN001
             job_dir.mkdir(parents=True, exist_ok=True)
             path = job_dir / "rendered.html"
             path.write_text("<html></html>", encoding="utf-8")
@@ -73,6 +79,63 @@ def test_job_manager_uses_custom_output_dir(tmp_path):
 
     assert result.artifacts[0].path == str(output_dir / "rendered.html")
     assert (output_dir / "rendered.html").exists()
+
+
+def test_job_manager_lists_and_cancels_queued_jobs(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingWorker:
+        def invoke(self, *, job_id, request, job_dir, user_data_dir, cancel_event=None):  # noqa: ANN001
+            started.set()
+            release.wait(timeout=5)
+            job_dir.mkdir(parents=True, exist_ok=True)
+            path = job_dir / "rendered.html"
+            path.write_text("<html></html>", encoding="utf-8")
+            return WorkerResult(
+                success=True,
+                output=request.output,
+                html_path=str(path),
+                artifacts=[WorkerArtifact(name="rendered_html", content_type="text/html; charset=utf-8", path=str(path))],
+            )
+
+    manager = JobManager(data_dir=tmp_path, worker=BlockingWorker(), max_workers=1)  # type: ignore[arg-type]
+    first = manager.create_job(RenderRequest(url="https://example.com", async_mode=True))
+    assert started.wait(timeout=5)
+    second = manager.create_job(RenderRequest(url="https://example.com", async_mode=True))
+
+    cancelled = manager.cancel(second)
+    active = manager.list_jobs(active_only=True)
+    release.set()
+    manager._futures[first].result(timeout=5)  # noqa: SLF001
+    manager.executor.shutdown(wait=True)
+
+    assert cancelled.status == JobStatus.CANCELLED
+    assert all(job.job_id != second for job in active)
+
+
+def test_job_manager_persists_history(tmp_path):
+    class DummyWorker:
+        def invoke(self, *, job_id, request, job_dir, user_data_dir, cancel_event=None):  # noqa: ANN001
+            job_dir.mkdir(parents=True, exist_ok=True)
+            path = job_dir / "rendered.html"
+            path.write_text("<html></html>", encoding="utf-8")
+            return WorkerResult(
+                success=True,
+                output=request.output,
+                html_path=str(path),
+                artifacts=[WorkerArtifact(name="rendered_html", content_type="text/html; charset=utf-8", path=str(path))],
+            )
+
+    history = HistoryStore(tmp_path / "history.json")
+    manager = JobManager(data_dir=tmp_path / "data", worker=DummyWorker(), history=history)  # type: ignore[arg-type]
+
+    result = manager.run_sync(RenderRequest(url="https://example.com"))
+    records = history.list()
+
+    assert records[0].job_id == result.job_id
+    assert records[0].status == JobStatus.SUCCEEDED
+    assert records[0].artifacts[0].name == "rendered_html"
 
 
 def test_server_cli_accepts_host_and_port():
@@ -150,3 +213,74 @@ def test_mcp_allows_localhost_origin_with_port():
 
     assert response.status_code == 200
     assert response.json()["result"]["protocolVersion"] == "2025-06-18"
+
+
+def test_webui_root_serves_html():
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Beak WebUI" in response.text
+
+
+def test_jobs_and_history_api_with_patched_manager(tmp_path, monkeypatch):
+    class DummyWorker:
+        def invoke(self, *, job_id, request, job_dir, user_data_dir, cancel_event=None):  # noqa: ANN001
+            job_dir.mkdir(parents=True, exist_ok=True)
+            path = job_dir / "rendered.html"
+            path.write_text("<html></html>", encoding="utf-8")
+            return WorkerResult(
+                success=True,
+                output=request.output,
+                html_path=str(path),
+                artifacts=[WorkerArtifact(name="rendered_html", content_type="text/html; charset=utf-8", path=str(path))],
+            )
+
+    history = HistoryStore(tmp_path / "history.json")
+    manager = JobManager(data_dir=tmp_path / "data", worker=DummyWorker(), history=history)  # type: ignore[arg-type]
+    monkeypatch.setattr(main_module, "JOBS", manager)
+    monkeypatch.setattr(main_module, "HISTORY", history)
+    client = TestClient(app)
+
+    accepted = client.post("/jobs", json={"url": "https://example.com", "output": "rendered_html"}).json()
+    manager._futures[accepted["job_id"]].result(timeout=5)  # noqa: SLF001
+    jobs = client.get("/jobs").json()
+    history_response = client.get("/history").json()
+    deleted = client.delete(f"/history/{accepted['job_id']}").json()
+
+    assert jobs["jobs"][0]["job_id"] == accepted["job_id"]
+    assert history_response["items"][0]["job_id"] == accepted["job_id"]
+    assert deleted["deleted"] is True
+
+
+def test_python_client_posts_json(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def read(self):
+            return b'{"job_id":"abc","status":"queued","status_url":"/jobs/abc"}'
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = request.data
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    client = BeakClient("http://beak.test/", timeout=12)
+
+    result = client.add_job(url="https://example.com", output="screenshot")
+
+    assert result["job_id"] == "abc"
+    assert captured["url"] == "http://beak.test/jobs"
+    assert captured["method"] == "POST"
+    assert b'"output": "screenshot"' in captured["body"]
+    assert captured["timeout"] == 12

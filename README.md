@@ -82,6 +82,12 @@ beak server --host ::1 --port 8000         # 仅 IPv6 本地回环
 http://127.0.0.1:8000/docs
 ```
 
+简易 WebUI 在：
+
+```
+http://127.0.0.1:8000/
+```
+
 ## 快速试一下
 
 ```powershell
@@ -108,6 +114,17 @@ $job = Invoke-RestMethod http://127.0.0.1:8000/render `
 Invoke-RestMethod "http://127.0.0.1:8000/jobs/$($job.job_id)"
 ```
 
+也可以显式添加异步任务、查看队列、终止任务：
+
+```powershell
+$job = Invoke-RestMethod http://127.0.0.1:8000/jobs `
+  -Method Post -ContentType "application/json" `
+  -Body '{"url":"https://example.com","output":"screenshot"}'
+
+Invoke-RestMethod "http://127.0.0.1:8000/jobs?active_only=true"
+Invoke-RestMethod "http://127.0.0.1:8000/jobs/$($job.job_id)/cancel" -Method Post
+```
+
 每个请求还可以单独控制超时、跳过证书错误，或者把 artifact 保存到指定服务端目录：
 
 ```powershell
@@ -124,6 +141,46 @@ Invoke-RestMethod http://127.0.0.1:8000/render `
 ```
 
 `output_dir` 是服务端路径；相对路径会放到 `BEAK_DATA_DIR` 下面，绝对路径则按原样使用。
+
+## WebUI
+
+根路径 `/` 提供一个轻量操作面板：
+
+- 添加异步任务。
+- 开关实时刷新，或手动非实时刷新。
+- 查询任务队列和任务状态。
+- 终止排队或运行中的任务。
+- 打开任务产物。
+- 查询、删除、清空历史记录。
+
+## Python SDK
+
+安装包后可以直接使用同步客户端：
+
+```python
+from beak import BeakClient
+
+client = BeakClient("http://127.0.0.1:8000")
+
+job = client.add_job(
+    url="https://example.com",
+    output="screenshot",
+    timeout_ms=30000,
+)
+print(client.get_job(job["job_id"]))
+
+client.download_artifact(job["job_id"], "screenshot", "screenshot.png")
+```
+
+常用方法包括 `render`、`capture`、`add_job`、`list_jobs`、`get_job`、`cancel_job`、`list_history`、`delete_history`、`clear_history` 和 `download_artifact`。
+
+## 历史记录
+
+任务历史会写入 `BEAK_DATA_DIR/history.json`。API 支持：
+
+- `GET /history?limit=200`
+- `DELETE /history/{job_id}`
+- `DELETE /history`
 
 ## MCP
 
@@ -146,10 +203,13 @@ Beak/
 ├── src/
 │   └── beak/                   # Python 主体包
 │       ├── main.py             # FastAPI 应用和 /render /capture /jobs 路由
+│       ├── client.py           # Python client SDK
+│       ├── history.py          # 简易历史记录持久化
 │       ├── cli.py              # `beak` 命令行入口
 │       ├── schemas.py          # 请求、响应、job、artifact 等 Pydantic 模型
 │       ├── jobs.py             # 同步 / 异步任务调度和运行时状态管理
 │       ├── browser.py          # webview / edge 引擎路由
+│       ├── webui/              # 内置简易 WebUI
 │       ├── worker.py           # WebView2 worker 进程调用封装
 │       └── playwright_edge.py  # Playwright 驱动的 Microsoft Edge 后端
 ├── workers/
@@ -169,10 +229,7 @@ Beak/
 
 ## To do
 
-- 简易webui
-- Python client SDK
 - 基于域名匹配策略的配置文件
-- 简易历史记录
 - 体积/时间策略的自动清理
 - URL 安全策略
 - 浏览器可见语义DOM提取转Markdown或JSONL
