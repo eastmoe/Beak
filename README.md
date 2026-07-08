@@ -148,6 +148,8 @@ Beak/
 - 简易历史记录
 - 体积/时间策略的自动清理
 - URL 安全策略
+- 浏览器可见语义DOM提取转Markdown或JSONL
+- 基于Playwright ARIA snapshot的accessbility tree导出为YAML
 
 
 
