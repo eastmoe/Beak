@@ -16,9 +16,16 @@ from .config import ConfigError, ConfigManager, UrlSafetyError
 from .history import HistoryStore
 from .jobs import JobManager, JobNotFound
 from .playwright_edge import EdgePlaywrightClient
-from .schemas import HealthResponse, HistoryListResponse, JobAccepted, JobInfo, JobListResponse, RenderRequest, RenderResult
+from .schemas import (
+    HealthResponse,
+    HistoryListResponse,
+    JobAccepted,
+    JobInfo,
+    JobListResponse,
+    RenderRequest,
+    RenderResult,
+)
 from .worker import WebView2WorkerClient, WorkerError
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("BEAK_DATA_DIR", PROJECT_ROOT / "data"))
@@ -298,6 +305,17 @@ def list_history(limit: int | None = None) -> HistoryListResponse:
     return HistoryListResponse(items=HISTORY.list(limit=normalized_limit))
 
 
+@app.delete("/jobs/{job_id}/download", tags=["jobs"])
+def release_download(job_id: str) -> dict[str, bool]:
+    try:
+        JOBS.release_download(job_id)
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail="job not found") from exc
+    except WorkerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"released": True}
+
+
 @app.delete(
     "/history/{job_id}",
     tags=["history"],
@@ -326,7 +344,7 @@ def _submit(request: RenderRequest, response: Response) -> RenderResult | JobAcc
     try:
         return JOBS.run_sync(request)
     except WorkerError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 def _prepare_request(request: RenderRequest) -> RenderRequest:

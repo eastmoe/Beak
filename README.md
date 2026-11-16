@@ -12,6 +12,7 @@ Windows 原生的无头浏览器爬取服务，不依赖 Docker，也不指望�
 支持的产出：
 
 - `rendered_html` —— JS 渲染完的 DOM
+- `download` —— 仅用于 `engine=edge` 的无头 Chromium 原生文件下载，文件直接写入磁盘，支持来源 Referer、Cookie、代理、重定向、大小上限、超时和取消；不将完整图片／视频读入内存。
 - `screenshot` —— PNG/JPEG 截图
 - `single_file` —— DevTools `Page.captureSnapshot` 生成的 MHTML 单文件
 - `complete_page` —— 渲染后的 `index.html` 加上抓到的资源文件，打包成 ZIP
@@ -39,7 +40,7 @@ Windows 原生的无头浏览器爬取服务，不依赖 Docker，也不指望�
 去 [Releases](https://github.com/eastmoe/Beak/releases) 页面下载 Windows wheel，里面已经带了编译好的 WebView2 worker，不用装 .NET SDK：
 
 ```powershell
-pip install beak-0.0.3-py3-none-win_amd64.whl
+pip install beak-0.0.4-py3-none-win_amd64.whl
 ```
 
 ### 自己编译
@@ -144,6 +145,14 @@ Invoke-RestMethod http://127.0.0.1:8000/render `
 ```
 
 `output_dir` 是服务端路径；相对路径会放到 `BEAK_DATA_DIR` 下面，绝对路径则按原样使用。
+
+下载请求示例：`{"url":"https://example.com/media.mp4","engine":"edge","output":"download","async_mode":false,"download_referer":"https://example.com/game","max_download_bytes":536870912}`。返回名为 `download` 的文件产物。Chromium 接管原响应体的文件写入，保留浏览器网络栈与重定向处理，媒体正文不经过 `response.body()` 或 JavaScript Base64。`max_download_bytes` 同时检查响应长度和浏览器下载进度；连接／响应头卡住也计入总超时。
+
+调用方取回自动临时下载后，可 `DELETE /jobs/{job_id}/download` 清理下载文件和隔离浏览器配置目录，保留任务历史。仅清理已结束、未指定自定义 output_dir 的下载任务，不删除其他渲染产物或用户指定目录。
+
+原生下载根据响应 MIME 设置下载扩展名，不统一伪装成 `.bin`；产物名称仍为 `download`。同步失败返回 HTTP 503，`detail` 包含稳定的 `code` 与可读的 `message`。超时为 `DOWNLOAD_TIMEOUT`，消息区分等待响应头、等待浏览器开始下载和接收文件，并附接收／总字节数；连接失败、中断、不完整、HTTP 错误和超限分别使用 `DOWNLOAD_NETWORK_ERROR`、`DOWNLOAD_INTERRUPTED`、`DOWNLOAD_INCOMPLETE`、`DOWNLOAD_HTTP_ERROR`、`DOWNLOAD_TOO_LARGE`，供调用方选择有限重试。浏览器安全检查保持开启。
+
+Edge 网页渲染的连接关闭、重置等临时网络错误使用 `BROWSER_NETWORK_ERROR`，超时使用 `BROWSER_TIMEOUT`；主网页 HTTP 4xx／5xx 返回 `BROWSER_HTTP_ERROR`，不再把错误页面当成成功渲染。是否重试由调用方按任务预算决定。
 
 语义 DOM 与 accessibility tree 导出：
 

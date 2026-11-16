@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -9,7 +10,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .history import HistoryStore
-from .schemas import Artifact, HistoryRecord, JobInfo, JobStatus, OutputType, RenderRequest, RenderResult
+from .schemas import (
+    Artifact,
+    HistoryRecord,
+    JobInfo,
+    JobStatus,
+    OutputType,
+    RenderRequest,
+    RenderResult,
+)
 from .worker import WorkerError
 
 
@@ -133,6 +142,25 @@ class JobManager:
                 if path.exists() and path.is_file():
                     return path
         raise JobNotFound(f"{job_id}/{name}")
+
+    def release_download(self, job_id: str) -> None:
+        with self._lock:
+            record = self._jobs.get(job_id)
+            if record is None:
+                raise JobNotFound(job_id)
+            if record.request.output != OutputType.DOWNLOAD or record.request.output_dir is not None:
+                raise WorkerError("Only temporary browser downloads can be released.")
+            if record.status not in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                raise WorkerError("The download is still running.")
+            for target, root in ((self.jobs_dir / job_id, self.jobs_dir), (self.profiles_dir / self._profile_key(job_id, record.request), self.profiles_dir)):
+                resolved = target.resolve()
+                if resolved == root.resolve() or not resolved.is_relative_to(root.resolve()):
+                    raise WorkerError("The temporary download path is invalid.")
+                if resolved.exists():
+                    shutil.rmtree(resolved)
+            if record.result:
+                record.result.artifacts = []
+            self._record_history_locked(record)
 
     def _run_job(self, job_id: str) -> RenderResult:
         with self._lock:

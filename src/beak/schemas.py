@@ -4,7 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 class OutputType(StrEnum):
@@ -15,6 +15,7 @@ class OutputType(StrEnum):
     SEMANTIC_MARKDOWN = "semantic_markdown"
     SEMANTIC_JSONL = "semantic_jsonl"
     ACCESSIBILITY_YAML = "accessibility_yaml"
+    DOWNLOAD = "download"
 
 
 class BrowserEngine(StrEnum):
@@ -122,6 +123,8 @@ class RenderRequest(BaseModel):
         default=False,
         description="When true, skip TLS/SSL certificate validation errors for this request.",
     )
+    download_referer: HttpUrl | None = None
+    max_download_bytes: Annotated[int, Field(ge=1, le=2 * 1024 * 1024 * 1024)] = 512 * 1024 * 1024
     output_dir: Annotated[
         Path | None,
         Field(
@@ -180,6 +183,12 @@ class RenderRequest(BaseModel):
             return None
         value = value.strip()
         return value or None
+
+    @model_validator(mode="after")
+    def download_uses_headless_edge(self):
+        if self.output == OutputType.DOWNLOAD and self.engine != BrowserEngine.EDGE:
+            raise ValueError("Browser downloads require engine=edge.")
+        return self
 
     @field_validator("output_dir", mode="before")
     @classmethod

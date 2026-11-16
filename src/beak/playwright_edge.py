@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import mimetypes
 import re
 import shutil
@@ -12,9 +11,25 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+from .browser_download import download_resource
 from .schemas import OutputType, RenderRequest, WorkerArtifact, WorkerResult
-from .semantic import SEMANTIC_DOM_SCRIPT, semantic_items_to_jsonl, semantic_items_to_markdown
+from .semantic import (
+    SEMANTIC_DOM_SCRIPT,
+    semantic_items_to_jsonl,
+    semantic_items_to_markdown,
+)
 from .worker import WorkerError
+
+TRANSIENT_NETWORK_ERRORS = (
+    "net::ERR_CONNECTION_CLOSED",
+    "net::ERR_CONNECTION_RESET",
+    "net::ERR_TIMED_OUT",
+    "net::ERR_CONNECTION_TIMED_OUT",
+    "net::ERR_HTTP2_PROTOCOL_ERROR",
+    "net::ERR_QUIC_PROTOCOL_ERROR",
+    "net::ERR_NETWORK_CHANGED",
+    "net::ERR_EMPTY_RESPONSE",
+)
 
 
 class EdgePlaywrightClient:
@@ -61,7 +76,12 @@ class EdgePlaywrightClient:
             )
         except WorkerError:
             raise
-        except Exception as exc:  # noqa: BLE001 - callers need a normalized browser failure.
+        except Exception as exc:
+            if any(reason in str(exc) for reason in TRANSIENT_NETWORK_ERRORS):
+                reason = str(exc).split("Call log:")[0].strip()
+                raise WorkerError(
+                    f"浏览器连接中断：{reason}", "BROWSER_NETWORK_ERROR"
+                ) from exc
             raise WorkerError(f"Playwright Edge failed: {exc}") from exc
 
     def _invoke(
@@ -107,11 +127,19 @@ class EdgePlaywrightClient:
                 context.set_default_navigation_timeout(timeout_ms)
                 self._apply_cookies(context, request)
                 page = context.new_page()
+                if request.output == OutputType.DOWNLOAD:
+                    return download_resource(context, page, request, job_dir, cancel_event)
                 page.on("response", lambda response: responses.append(response))
 
                 goto_wait = self._goto_wait_until(request)
                 self._raise_if_cancelled(cancel_event)
-                page.goto(str(request.url), wait_until=goto_wait, timeout=timeout_ms)
+                response = page.goto(
+                    str(request.url), wait_until=goto_wait, timeout=timeout_ms
+                )
+                if response and response.status >= 400:
+                    raise WorkerError(
+                        f"浏览器网页返回 HTTP {response.status}。", "BROWSER_HTTP_ERROR"
+                    )
                 self._raise_if_cancelled(cancel_event)
                 if request.wait.until == "network_idle":
                     page.wait_for_load_state("networkidle", timeout=timeout_ms)
@@ -136,7 +164,14 @@ class EdgePlaywrightClient:
                     return self._export_accessibility_yaml(page, request, job_dir)
                 raise WorkerError(f"Unsupported output type: {request.output}")
             except PlaywrightTimeoutError as exc:
-                raise WorkerError(f"Playwright Edge timed out after {timeout_ms}ms: {exc}") from exc
+                code = (
+                    "DOWNLOAD_TIMEOUT"
+                    if request.output == OutputType.DOWNLOAD
+                    else "BROWSER_TIMEOUT"
+                )
+                raise WorkerError(
+                    f"Playwright Edge timed out after {timeout_ms}ms: {exc}", code
+                ) from exc
             finally:
                 context.close()
 
@@ -332,7 +367,7 @@ class EdgePlaywrightClient:
 
     @staticmethod
     def _rewrite_resource_references(html: str, base_url: str, resource_map: dict[str, str]) -> str:
-        pattern = re.compile(r"(?P<prefix>\b(?:src|href)\s*=\s*[\"'])(?P<url>[^\"']+)(?P<suffix>[\"'])", re.I)
+        pattern = re.compile(r"(?P<prefix>\b(?:src|href)\s*=\s*[\"'])(?P<url>[^\"']+)(?P<suffix>[\"'])", re.IGNORECASE)
 
         def replace(match: re.Match[str]) -> str:
             raw_url = match.group("url")

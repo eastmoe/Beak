@@ -15,6 +15,10 @@ from .schemas import RenderRequest, WorkerResult
 class WorkerError(RuntimeError):
     """Raised when the WebView2 worker cannot complete a task."""
 
+    def __init__(self, message: str, code: str = "WORKER_FAILED"):
+        super().__init__(message)
+        self.code = code
+
 
 class WebView2WorkerClient:
     def __init__(self, project_root: Path, worker_path: str | None = None) -> None:
