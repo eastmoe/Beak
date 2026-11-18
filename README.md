@@ -40,7 +40,7 @@ Windows 原生的无头浏览器爬取服务，不依赖 Docker，也不指望�
 去 [Releases](https://github.com/eastmoe/Beak/releases) 页面下载 Windows wheel，里面已经带了编译好的 WebView2 worker，不用装 .NET SDK：
 
 ```powershell
-pip install beak-0.0.5-py3-none-win_amd64.whl
+pip install beak-0.0.6-py3-none-win_amd64.whl
 ```
 
 ### 自己编译
